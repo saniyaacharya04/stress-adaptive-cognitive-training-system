@@ -28,6 +28,7 @@ import ParticipantDetail from "./pages/admin/ParticipantDetail";
 import MonitoringRoom from "./pages/admin/MonitoringRoom";
 import LogBrowser from "./pages/admin/LogBrowser";
 import ExperimentControl from "./pages/admin/ExperimentControl";
+import AdminSettings from "./pages/admin/AdminSettings";
 
 const queryClient = new QueryClient();
 
@@ -60,6 +61,7 @@ const App = () => (
             <Route path="monitoring" element={<MonitoringRoom />} />
             <Route path="logs" element={<LogBrowser />} />
             <Route path="control" element={<ExperimentControl />} />
+            <Route path="settings" element={<AdminSettings />} />
           </Route>
 
           {/* 404 */}
