@@ -1,73 +1,223 @@
-# Welcome to your Lovable project
+# Stress-Adaptive Cognitive Training System (SACTS)
 
-## Project info
+SACTS is a research-grade platform for running adaptive cognitive experiments with real-time stress measurement.
+It combines multimodal data capture, physiological stress inference, and adaptive task difficulty using real-time feedback loops.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+This repository implements a complete end-to-end system including:
 
-## How can I edit this code?
+* Frontend (React + Vite + TypeScript + Tailwind + shadcn/ui)
+* Backend (Flask + Socket.IO + SQLAlchemy)
+* Live cognitive tasks (N-back, Stroop, Reaction Time)
+* Participant and session management
+* Data export, logging, and baseline analytics
+* Modular architecture for machine learning and adaptive engines
 
-There are several ways of editing your application.
+---
 
-**Use Lovable**
+## 1. Features
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### Core Platform
 
-Changes made via Lovable will be committed automatically to this repo.
+* Participant onboarding and identifier assignment
+* JWT-based session authentication
+* Research-grade task timing (millisecond precision)
+* Automatic data logging for every trial
+* End-to-end separation of participant and admin interfaces
+* SQLite local development database (PostgreSQL compatible)
 
-**Use your preferred IDE**
+### Stress and Adaptation (Phase 2 and 3)
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+* Real-time stress data streaming via WebSockets
+* RR-interval (PPG/HRV) ingestion API
+* ML pipeline for adaptive stress inference
+* PID controller for difficulty tuning
+* A/B testing framework for adaptive algorithms
+* Supervisor task orchestrator
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Admin Tools
 
-Follow these steps:
+* Live monitoring room
+* Training session timeline visualization
+* Log browser for experiment audit
+* Admin authentication and settings panel
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+---
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## 2. Project Structure
 
-# Step 3: Install the necessary dependencies.
-npm i
+```
+stress-adaptive-cognitive-training-system/
+│
+├── backend/
+│   ├── app.py
+│   ├── app.db
+│   ├── requirements.txt
+│   ├── models/
+│   ├── routes/
+│   ├── services/
+│   ├── sockets/
+│   ├── utils/
+│   └── static/
+│
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── api/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── pages/
+│   │   ├── lib/
+│   │   └── styles/
+│   └── public/
+│
+├── docker/
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   └── docker-compose.yml
+│
+├── tools/
+│   ├── stress_model_training.ipynb
+│   └── data_preprocessing.py
+│
+└── README.md
+```
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+---
+
+## 3. Requirements
+
+### Backend
+
+* Python 3.11+
+* pip or conda
+* SQLite (default) or PostgreSQL
+* eventlet for WebSocket concurrency
+
+### Frontend
+
+* Node.js 18+
+* npm or bun
+
+---
+
+## 4. Setup Instructions
+
+### 4.1 Create environment
+
+```
+conda create -n stresssys python=3.11
+conda activate stresssys
+```
+
+### 4.2 Install backend
+
+```
+cd backend
+pip install -r requirements.txt
+python app.py
+```
+
+Backend runs on:
+
+```
+http://localhost:5000
+```
+
+Verify:
+
+```
+curl http://localhost:5000/healthz
+```
+
+### 4.3 Install frontend
+
+```
+cd frontend
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Frontend runs on:
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```
+http://localhost:8080
+```
 
-**Use GitHub Codespaces**
+---
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## 5. Key API Endpoints
 
-## What technologies are used for this project?
+### POST /api/register
 
-This project is built with:
+Registers a new participant and assigns a participant ID.
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+### POST /api/session
 
-## How can I deploy this project?
+Creates a session and issues a session token.
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+### WebSocket `/ws/stress`
 
-## Can I connect a custom domain to my Lovable project?
+Used for live RR-interval and stress inference streaming.
 
-Yes, you can!
+---
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## 6. Running in Production (Docker)
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+From the project root:
+
+```
+docker compose -f docker/docker-compose.yml up --build
+```
+
+This launches:
+
+* Backend (Gunicorn + Eventlet)
+* Frontend (Nginx static server)
+* Optional GPU inference container
+
+---
+
+## 7. Development Notes
+
+### Auto-generated participant ID
+
+Backend assigns IDs using timestamp-safe hashing.
+
+### Cross-Origin Configuration
+
+CORS policy allows `localhost:8080` during development and strict origins in production.
+
+### Real-time Precision
+
+Eventlet WebSockets are used for low-latency (<10 ms) bi-directional streaming.
+
+### Database Migration
+
+SQLite is used for development. The models are portable to PostgreSQL without modification.
+
+---
+
+## 8. Future Extensions
+
+Planned modules for extended research studies:
+
+* Deep learning affect inference (CNN + LSTM)
+* Eye-tracking via WebRTC landmarks
+* Personalized stress-response calibration
+* EEG integration pipeline
+* Multi-participant synchronized trials
+
+---
+
+## 9. License
+
+This project is released for research and academic usage.
+Commercial use requires permission from the authors.
+
+---
+
+## 10. Contact
+
+For implementation details, research collaboration, or deployment guidance, contact the system maintainer.
