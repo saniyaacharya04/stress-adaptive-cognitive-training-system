@@ -6,93 +6,34 @@ import os
 import json
 import time
 import uuid
-import threading
+import numpy as np
+import joblib
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
-
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Float, ForeignKey, Text
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from werkzeug.security import generate_password_hash, check_password_hash
-
 import jwt
-import numpy as np
-import joblib
 
-# ---------- Config ----------
+# Import DB engine/session and models from canonical location
+from database.base import engine, SessionLocal, Base
+from database import models as dbmodels
+
+# Config
 BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.environ.get("DATABASE_URL") or f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
 JWT_SECRET = os.environ.get("JWT_SECRET", "please_change_this_secret")
-JWT_EXP_MINUTES = int(os.environ.get("JWT_EXP_MINUTES", 120))
+JWT_EXP_MINUTES = int(os.environ.get("JWT_EXP_MINUTES", "720"))
 EMA_ALPHA = float(os.environ.get("EMA_ALPHA", 0.3))
 STATIC_FOLDER = os.path.join(BASE_DIR, "static")
 os.makedirs(STATIC_FOLDER, exist_ok=True)
 
-# ---------- DB ----------
-engine = create_engine(DB_PATH, connect_args={"check_same_thread": False} if DB_PATH.startswith("sqlite") else {})
-SessionLocal = sessionmaker(bind=engine)
-Base = declarative_base()
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    role = Column(String, default="researcher")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class Participant(Base):
-    __tablename__ = "participants"
-    id = Column(Integer, primary_key=True)
-    participant_id = Column(String, unique=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    assignment_group = Column(String, default="control")
-
-class SessionToken(Base):
-    __tablename__ = "sessions"
-    id = Column(Integer, primary_key=True)
-    token = Column(String, unique=True, nullable=False, index=True)
-    participant_id = Column(Integer, ForeignKey("participants.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)
-    ema_high = Column(Float, default=0.0)
-    participant = relationship("Participant")
-
-class LogEntry(Base):
-    __tablename__ = "logs"
-    id = Column(Integer, primary_key=True)
-    participant_id = Column(String, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    task = Column(String, nullable=True)
-    trial = Column(Integer, nullable=True)
-    event = Column(String, nullable=True)
-    payload = Column(Text)
-    server_received_at = Column(Float, default=time.time)
-    smoothed_high = Column(Float, nullable=True)
-    rmssd = Column(Float, nullable=True)
-    mean_hr = Column(Float, nullable=True)
-    accuracy = Column(Float, nullable=True)
-
+# Ensure tables exist in the single engine
 Base.metadata.create_all(bind=engine)
 
-# ---------- Create default admin if none ----------
-def ensure_admin():
-    db = SessionLocal()
-    try:
-        if db.query(User).count() == 0:
-            admin_pw = os.environ.get("ADMIN_PASSWORD", "adminpass")
-            admin = User(username="admin", password_hash=generate_password_hash(admin_pw), role="admin")
-            db.add(admin); db.commit()
-            print("Created default admin user 'admin'. Change ADMIN_PASSWORD env var.")
-    finally:
-        db.close()
-
-ensure_admin()
-
-# ---------- Optional: load models if present ----------
+# Attempt to load RF model if present
 MODEL_RF_PATH = os.path.join(BASE_DIR, "models", "stress_rf_model.pkl")
 clf_rf = None
 if os.path.exists(MODEL_RF_PATH):
@@ -102,56 +43,40 @@ if os.path.exists(MODEL_RF_PATH):
     except Exception as e:
         print("Could not load RF model:", e)
 
-# ---------- Helpers ----------
+# Helpers
 def gen_token():
     return uuid.uuid4().hex
 
-def create_participant_if_missing(db, participant_id):
-    p = db.query(Participant).filter_by(participant_id=participant_id).first()
-    if p:
-        return p
-    # simple assignment group randomization
-    group = np.random.choice(["control", "pid"])
-    p = Participant(participant_id=participant_id, assignment_group=group)
-    db.add(p); db.commit(); db.refresh(p)
-    return p
+def create_admin_jwt(username, role="admin"):
+    payload = {"sub": username, "role": role, "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)}
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return token
 
-def create_session(db, participant_obj, ttl_minutes=180):
-    token = gen_token()
-    expires = datetime.utcnow() + timedelta(minutes=ttl_minutes)
-    s = SessionToken(token=token, participant_id=participant_obj.id, expires_at=expires, ema_high=0.0)
-    db.add(s); db.commit(); db.refresh(s)
-    return s
+def decode_jwt(token):
+    return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
 
-def validate_session(db, token):
-    if not token:
-        return None
-    s = db.query(SessionToken).filter_by(token=token).first()
-    if not s:
-        return None
-    if s.expires_at < datetime.utcnow():
-        db.delete(s); db.commit(); return None
-    return s
+def require_jwt_admin(f):
+    @wraps(f)
+    def inner(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        token = None
+        if auth.startswith("Bearer "):
+            token = auth.split(" ",1)[1]
+        if not token:
+            return jsonify({"ok": False, "error": "missing token"}), 401
+        try:
+            payload = decode_jwt(token)
+        except jwt.ExpiredSignatureError:
+            return jsonify({"ok": False, "error": "token expired"}), 401
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"invalid token: {e}"}), 401
+        if payload.get("role") != "admin":
+            return jsonify({"ok": False, "error": "admin required"}), 403
+        request.admin_user = payload.get("sub")
+        return f(*args, **kwargs)
+    return inner
 
-def append_log_db(db, pid, obj):
-    task = obj.get("task")
-    trial = obj.get("trial")
-    event = obj.get("event")
-    smoothed = obj.get("smoothed", {})
-    sm_high = smoothed.get("ema_high") if isinstance(smoothed, dict) else None
-    features = obj.get("features") or (obj.get("prediction",{}) or {}).get("features") or {}
-    rmssd = features.get("rmssd")
-    mean_hr = features.get("mean_hr")
-    accuracy = obj.get("accuracy") if obj.get("accuracy") is not None else (1.0 if obj.get("correct") else (0.0 if obj.get("correct") is False else None))
-    le = LogEntry(
-        participant_id=pid,
-        timestamp=datetime.fromisoformat(obj.get("timestamp")) if obj.get("timestamp") else datetime.utcnow(),
-        task=task, trial=trial, event=event, payload=json.dumps(obj, ensure_ascii=False),
-        server_received_at=time.time(), smoothed_high=sm_high, rmssd=rmssd, mean_hr=mean_hr, accuracy=accuracy
-    )
-    db.add(le); db.commit(); db.refresh(le)
-    return le
-
+# Feature extraction and inference (kept simple)
 def rr_to_features_simple(rr_ms):
     rr = np.array(rr_ms, dtype=float)
     if rr.size < 2:
@@ -160,7 +85,7 @@ def rr_to_features_simple(rr_ms):
     rmssd = float(np.sqrt(np.mean(diff**2)))
     sdnn = float(np.std(rr))
     mean_rr = float(np.mean(rr))
-    mean_hr = float(60000.0 / mean_rr)
+    mean_hr = float(60000.0 / mean_rr) if mean_rr != 0 else None
     return {"rmssd": rmssd, "sdnn": sdnn, "mean_rr": mean_rr, "mean_hr": mean_hr}
 
 def infer_from_rr(rr_ms):
@@ -175,7 +100,7 @@ def infer_from_rr(rr_ms):
         print("inference error", e)
     return res
 
-# ---------- PID (minimal) ----------
+# PID controller (kept)
 class PIDController:
     def __init__(self, Kp=0.8, Ki=0.06, Kd=0.2, target=0.35):
         self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
@@ -201,43 +126,77 @@ class PIDController:
 pid_controllers = {}
 difficulty_state = {}
 
-# ---------- Flask + SocketIO ----------
+# DB helpers (use canonical models)
+def create_participant_if_missing(db, participant_id):
+    p = db.query(dbmodels.Participant).filter_by(participant_id=participant_id).first()
+    if p:
+        return p
+    group = np.random.choice(["control", "pid"])
+    p = dbmodels.Participant(participant_id=participant_id, assignment_group=group)
+    db.add(p); db.commit(); db.refresh(p)
+    return p
+
+def create_session(db, participant_obj, ttl_minutes=180):
+    token = gen_token()
+    expires = datetime.utcnow() + timedelta(minutes=ttl_minutes)
+    s = dbmodels.Session(participant_id=participant_obj.participant_id, token=token, expires_at=expires)
+    db.add(s); db.commit(); db.refresh(s)
+    return s
+
+def validate_session(db, token):
+    if not token:
+        return None
+    s = db.query(dbmodels.Session).filter_by(token=token).first()
+    if not s:
+        return None
+    if s.expires_at and s.expires_at < datetime.utcnow():
+        db.delete(s); db.commit(); return None
+    return s
+
+def append_log_db(db, pid, obj):
+    task = obj.get("task")
+    trial = obj.get("trial")
+    event = obj.get("event")
+    smoothed = obj.get("smoothed", {})
+    sm_high = smoothed.get("ema_high") if isinstance(smoothed, dict) else None
+    features = obj.get("features") or (obj.get("prediction",{}) or {}).get("features") or {}
+    rmssd = features.get("rmssd")
+    mean_hr = features.get("mean_hr")
+    accuracy = obj.get("accuracy") if obj.get("accuracy") is not None else (1.0 if obj.get("correct") else (0.0 if obj.get("correct") is False else None))
+    tl = dbmodels.TaskLog(
+        participant_id=pid,
+        session_token=obj.get("session_token"),
+        task_name=task, trial_index=trial, event=event,
+        correct=obj.get("correct"),
+        reaction_time_ms=obj.get("reaction_time_ms"),
+        extra=obj.get("extra")
+    )
+    db.add(tl); db.commit(); db.refresh(tl)
+    # optional: also store a StressLog entry when provided
+    if sm_high is not None:
+        sl = dbmodels.StressLog(
+            participant_id=pid,
+            session_token=obj.get("session_token"),
+            raw_proba=obj.get("prediction", {}).get("proba") if obj.get("prediction") else None,
+            ema_high=sm_high,
+            smoothed_label=obj.get("smoothed", {}).get("smoothed_label"),
+            difficulty=obj.get("difficulty"),
+            features=features
+        )
+        db.add(sl); db.commit(); db.refresh(sl)
+    return tl
+
+# Flask + SocketIO
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path="/")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
-# ---------- JWT helpers ----------
-def create_admin_jwt(username, role):
-    payload = {"sub": username, "role": role, "exp": datetime.utcnow() + timedelta(minutes=JWT_EXP_MINUTES)}
-    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-    return token
-
-def require_jwt_admin(f):
-    @wraps(f)
-    def inner(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        token = None
-        if auth.startswith("Bearer "):
-            token = auth.split(" ",1)[1]
-        if not token:
-            return jsonify({"ok": False, "error": "missing token"}), 401
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError:
-            return jsonify({"ok": False, "error": "token expired"}), 401
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"invalid token: {e}"}), 401
-        if payload.get("role") != "admin":
-            return jsonify({"ok": False, "error": "admin required"}), 403
-        request.admin_user = payload.get("sub")
-        return f(*args, **kwargs)
-    return inner
-
-# ---------- Endpoints ----------
+# Health
 @app.route("/healthz")
 def health():
     return jsonify({"ok": True, "status": "healthy"})
 
+# Admin login (uses AdminUser)
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
     data = request.get_json(silent=True) or {}
@@ -246,14 +205,15 @@ def admin_login():
         return jsonify({"ok": False, "error": "username & password required"}), 400
     db = SessionLocal()
     try:
-        user = db.query(User).filter_by(username=username).first()
+        user = db.query(dbmodels.AdminUser).filter_by(username=username).first()
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({"ok": False, "error": "invalid credentials"}), 401
-        token = create_admin_jwt(user.username, user.role)
-        return jsonify({"ok": True, "data": {"token": token, "role": user.role}})
+        token = create_admin_jwt(user.username, role="admin")
+        return jsonify({"ok": True, "data": {"token": token, "role": "admin"}})
     finally:
         db.close()
 
+# Participant registration and session creation
 @app.route("/api/register", methods=["POST"])
 def api_register():
     data = request.get_json(silent=True) or {}
@@ -277,10 +237,11 @@ def api_session():
         s = create_session(db, p)
         difficulty_state[p.participant_id] = 2
         pid_controllers[p.participant_id] = PIDController()
-        return jsonify({"ok": True, "data": {"token": s.token, "participant_id": p.participant_id, "expires_at": s.expires_at.isoformat()}})
+        return jsonify({"ok": True, "data": {"token": s.token, "participant_id": p.participant_id, "expires_at": s.expires_at.isoformat() if s.expires_at else None}})
     finally:
         db.close()
 
+# Stress inference endpoint
 @app.route("/api/stress", methods=["GET","POST"])
 def api_stress():
     db = SessionLocal()
@@ -311,10 +272,11 @@ def api_stress():
                 smoothed_label = 2 if new_ema >= 0.5 else (1 if new_ema >= 0.2 else 0)
                 smoothed = {"ema_high": new_ema, "smoothed_label": smoothed_label}
                 entry = {"timestamp": datetime.utcnow().isoformat(), "event": "rr_window", "rr_count": len(rr), "prediction": res, "smoothed": smoothed, "features": res.get("features")}
+                # append log
                 append_log_db(db, s.participant.participant_id, entry)
-                # emit to socket room
+                # emit to room
                 socketio.emit(f"stress_update_{s.participant.participant_id}", {"timestamp": datetime.utcnow().isoformat(), "participant_id": s.participant.participant_id, "ema_high": new_ema, "raw_proba": res.get("proba")}, room=f"room_{s.participant.participant_id}")
-                # PID-> difficulty update
+                # PID difficulty tuning
                 ctrl = pid_controllers.get(s.participant.participant_id)
                 if ctrl is None:
                     ctrl = PIDController()
@@ -331,6 +293,7 @@ def api_stress():
     finally:
         db.close()
 
+# Logging endpoint
 @app.route("/api/log", methods=["POST"])
 def api_log():
     data = request.get_json(silent=True) or {}
@@ -360,12 +323,13 @@ def api_log():
     finally:
         db.close()
 
+# Admin protected endpoints
 @app.route("/api/admin/participants", methods=["GET"])
 @require_jwt_admin
 def admin_participants():
     db = SessionLocal()
     try:
-        parts = db.query(Participant).all()
+        parts = db.query(dbmodels.Participant).all()
         return jsonify({"ok": True, "data": [{"participant_id": p.participant_id, "created_at": p.created_at.isoformat(), "assignment_group": p.assignment_group} for p in parts]})
     finally:
         db.close()
@@ -378,17 +342,15 @@ def admin_query_logs():
     from_ts = data.get("from_ts"); to_ts = data.get("to_ts")
     db = SessionLocal()
     try:
-        q = db.query(LogEntry)
-        if pid: q = q.filter(LogEntry.participant_id == pid)
-        if task: q = q.filter(LogEntry.task == task)
-        if from_ts: q = q.filter(LogEntry.timestamp >= datetime.fromisoformat(from_ts))
-        if to_ts: q = q.filter(LogEntry.timestamp <= datetime.fromisoformat(to_ts))
-        q = q.order_by(LogEntry.timestamp.desc()).limit(limit)
+        q = db.query(dbmodels.TaskLog)
+        if pid: q = q.filter(dbmodels.TaskLog.participant_id == pid)
+        if task: q = q.filter(dbmodels.TaskLog.task_name == task)
+        if from_ts: q = q.filter(dbmodels.TaskLog.timestamp >= datetime.fromisoformat(from_ts))
+        if to_ts: q = q.filter(dbmodels.TaskLog.timestamp <= datetime.fromisoformat(to_ts))
+        q = q.order_by(dbmodels.TaskLog.timestamp.desc()).limit(limit)
         rows = []
         for r in q.all():
-            try: payload = json.loads(r.payload)
-            except: payload = {"raw": r.payload}
-            rows.append({"id": r.id, "participant_id": r.participant_id, "timestamp": r.timestamp.isoformat(), "task": r.task, "trial": r.trial, "event": r.event, "payload": payload, "smoothed_high": r.smoothed_high, "rmssd": r.rmssd, "mean_hr": r.mean_hr, "accuracy": r.accuracy})
+            rows.append({"id": r.id, "participant_id": r.participant_id, "timestamp": r.timestamp.isoformat(), "task": r.task_name, "trial": r.trial_index, "event": r.event, "payload": r.extra, "correct": r.correct, "reaction_time_ms": r.reaction_time_ms})
         return jsonify({"ok": True, "data": rows})
     finally:
         db.close()
@@ -402,23 +364,23 @@ def admin_export():
     task = request.args.get("task"); from_ts = request.args.get("from_ts"); to_ts = request.args.get("to_ts")
     db = SessionLocal()
     try:
-        q = db.query(LogEntry).filter(LogEntry.participant_id == pid)
-        if task: q = q.filter(LogEntry.task == task)
-        if from_ts: q = q.filter(LogEntry.timestamp >= datetime.fromisoformat(from_ts))
-        if to_ts: q = q.filter(LogEntry.timestamp <= datetime.fromisoformat(to_ts))
-        q = q.order_by(LogEntry.timestamp.asc())
+        q = db.query(dbmodels.TaskLog).filter(dbmodels.TaskLog.participant_id == pid)
+        if task: q = q.filter(dbmodels.TaskLog.task_name == task)
+        if from_ts: q = q.filter(dbmodels.TaskLog.timestamp >= datetime.fromisoformat(from_ts))
+        if to_ts: q = q.filter(dbmodels.TaskLog.timestamp <= datetime.fromisoformat(to_ts))
+        q = q.order_by(dbmodels.TaskLog.timestamp.asc())
         tmp = os.path.join(BASE_DIR, f"{pid}_export_{int(time.time())}.csv")
         import csv
         with open(tmp, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["id","participant_id","timestamp","task","trial","event","smoothed_high","rmssd","mean_hr","accuracy","payload"])
+            w.writerow(["id","participant_id","timestamp","task","trial","event","payload","correct","reaction_time_ms"])
             for r in q.all():
-                w.writerow([r.id, r.participant_id, r.timestamp.isoformat(), r.task, r.trial, r.event, r.smoothed_high, r.rmssd, r.mean_hr, r.accuracy, r.payload])
+                w.writerow([r.id, r.participant_id, r.timestamp.isoformat(), r.task_name, r.trial_index, r.event, json.dumps(r.extra or {}), r.correct, r.reaction_time_ms])
         return send_file(tmp, as_attachment=True, download_name=f"{pid}_logs.csv")
     finally:
         db.close()
 
-# ---------- Socket handlers ----------
+# Socket handlers
 @socketio.on("join_participant_room")
 def handle_join(data):
     pid = data.get("participant_id")
@@ -443,12 +405,13 @@ def handle_face_metrics(data):
     finally:
         db.close()
 
-# ---------- run ----------
+# Run
 if __name__ == "__main__":
-    try:
-        import eventlet
-        eventlet.monkey_patch()
-    except Exception:
-        print("eventlet not installed; install eventlet for best Socket.IO support")
     print("Starting app on 0.0.0.0:5000")
     socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# Register extra admin endpoints
+try:
+    from routes.admin_extra import bp as admin_extra_bp
+    app.register_blueprint(admin_extra_bp)
+except Exception as _:
+    print("admin_extra blueprint registration failed or already present")
