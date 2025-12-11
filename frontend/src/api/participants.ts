@@ -1,3 +1,4 @@
+// frontend/src/api/participants.ts
 import { http } from "./http";
 
 export interface RegisterResponse {

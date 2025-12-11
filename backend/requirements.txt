@@ -12,3 +12,9 @@ pandas==2.2.2
 matplotlib==3.8.4
 fpdf==1.7.2
 psycopg2-binary==2.9.9
+
+# Phase 2 additions
+matplotlib==3.8.4
+pyjwt==2.8.0
+werkzeug>=3.0.1
+
