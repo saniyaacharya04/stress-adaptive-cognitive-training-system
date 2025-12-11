@@ -87,29 +87,21 @@ export async function queryLogs(body: {
   return res.data as ApiResponse<LogRow[]>;
 }
 
-/* ---------- EXPORT CSV (STRONG TYPING + ERROR HANDLING) ---------- */
+/* ---------------------------------------------------------
+   EXPORT CSV (FIXED — returns Blob so await works)
+--------------------------------------------------------- */
 export async function exportParticipantCSV(
   participant_id: string
-): Promise<{ ok: boolean; blob?: Blob; error?: string }> {
-  try {
-    const response = await http.get<Blob>(
-      `/api/admin/export?participant_id=${encodeURIComponent(participant_id)}`,
-      { responseType: "blob" }
-    );
-
-    // Detect backend error returned as JSON instead of CSV
-    if (response.headers["content-type"]?.includes("application/json")) {
-      const text = await response.data.text();
-      const json = JSON.parse(text);
-      return { ok: false, error: json.error || "Export failed" };
+): Promise<Blob> {
+  const response = await http.get(
+    `/api/admin/export?participant_id=${encodeURIComponent(participant_id)}`,
+    {
+      responseType: "blob",
     }
+  );
 
-    return { ok: true, blob: response.data };
-  } catch (err: any) {
-    return { ok: false, error: err.message || "Network error" };
-  }
+  return response.data; // Blob
 }
-
 
 /* ---------------------------------------------------------
    CHANGE ADMIN PASSWORD

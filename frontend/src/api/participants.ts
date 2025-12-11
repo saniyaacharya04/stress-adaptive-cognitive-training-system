@@ -1,15 +1,12 @@
-// frontend/src/api/participants.ts
-import { http } from "./http";
+import { http } from "@/api/http";
 
 export interface RegisterResponse {
   ok: boolean;
-  data: {
-    participant_id: string;
-    assignment_group: string;
-  };
+  participant_id: string;
+  group: string;
 }
 
 export async function registerParticipant(): Promise<RegisterResponse> {
-  const res = await http.post<RegisterResponse>("/api/register", {});
-  return res.data;
+  const res = await http.post("/api/register", {});
+  return res.data as RegisterResponse; // backend shape matches
 }

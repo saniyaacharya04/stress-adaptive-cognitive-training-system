@@ -1,15 +1,19 @@
-import { http } from "./http";
+import { http } from "@/api/http";
 
 export interface SessionResponse {
-  ok: boolean;
-  data: {
-    participant_id: string;
-    token: string;
-    expires_at: string;
-  };
+  token: string;
+  expires_at: string;
 }
 
-export async function createSession(participant_id: string): Promise<SessionResponse> {
-  const res = await http.post<SessionResponse>("/api/session", { participant_id });
-  return res.data;
+export async function createSession(
+  participant_id: string
+): Promise<SessionResponse> {
+  const res = await http.post("/api/session", { participant_id });
+
+  const payload = res.data as {
+    ok: boolean;
+    data: { token: string; expires_at: string };
+  };
+
+  return payload.data;
 }
