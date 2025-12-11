@@ -18,25 +18,23 @@ export default function ParticipantHome() {
     try {
       setLoading(true);
 
-      // 1) REGISTER PARTICIPANT
-      const reg = await registerParticipant();
-      const pid = reg.data.participant_id;
+      // 1) REGISTER PARTICIPANT  ----------------------------
+      const reg = await registerParticipant(); 
+      const pid = reg.participant_id;   // ✓ CORRECT SHAPE
       setParticipantId(pid);
 
-      // 2) CREATE SESSION
+      // 2) CREATE SESSION -----------------------------------
       const ses = await createSession(pid);
-      const token = ses.data.token;
+      const token = ses.token;          // ✓ CORRECT SHAPE
 
-      // Save for all tasks
+      // Save for later use
       localStorage.setItem("participant_id", pid);
       localStorage.setItem("participant_token", token);
 
-      // 3) Move to first task
-      // Wait 800ms so UI updates visually
-setTimeout(() => {
-  navigate("/participant/nback");
-}, 800);
-
+      // Navigate to task after slight delay for UI animation
+      setTimeout(() => {
+        navigate("/participant/nback");
+      }, 800);
 
     } catch (err) {
       console.error("SESSION START ERROR:", err);

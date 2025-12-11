@@ -1,0 +1,58 @@
+swagger: "2.0"
+info:
+  title: Stress Adaptive Cognitive System API
+  version: "1.0.0"
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        200:
+          description: OK
+
+  /api/register:
+    post:
+      summary: Register participant
+      parameters:
+        - name: body
+          in: body
+          schema:
+            type: object
+            properties:
+              participant_id:
+                type: string
+      responses:
+        200:
+          description: Registered
+
+  /api/session:
+    post:
+      summary: Create session
+      parameters:
+        - name: body
+          in: body
+          schema:
+            type: object
+            properties:
+              participant_id:
+                type: string
+      responses:
+        200:
+          description: Session created
+
+  /api/stress:
+    post:
+      summary: Stress inference
+      parameters:
+        - name: body
+          in: body
+          schema:
+            type: object
+            properties:
+              rr_intervals_ms:
+                type: array
+                items: { type: number }
+      responses:
+        200:
+          description: Stress output

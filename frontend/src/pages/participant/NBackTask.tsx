@@ -3,58 +3,150 @@ import { Button } from "@/components/ui/button";
 import { StressGauge } from "@/components/shared/StressGauge";
 import { DifficultyMeter } from "@/components/shared/DifficultyMeter";
 import { TaskStimulusCard } from "@/components/shared/TaskStimulusCard";
-import { Check, X, Pause, SkipForward } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Check, X, Pause } from "lucide-react";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 
-const letters = ["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T"];
+import useTaskEngine from "@/hooks/useTaskEngine";
+import useSocket from "@/hooks/useSocket";
+
+// Same letters you used
+const letters = ["A","B","C","D","E","F","G","H","J","K","L","M","N","P","Q","R","S","T"];
 
 export default function NBackTask() {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const token = location.state?.token;
+  const participantId = location.state?.participantId;
+
+  const { start, sendTrial, finish } = useTaskEngine(token, participantId);
+  const socket = useSocket(participantId);
+
+  // === EXISTING UI STATES (preserved) ===
   const [currentLetter, setCurrentLetter] = useState("F");
-  const [difficultyLevel, setDifficultyLevel] = useState(2);
-  const [stressLevel, setStressLevel] = useState(35);
+  const [difficultyLevel, setDifficultyLevel] = useState(2);      // backend updates this
+  const [stressLevel, setStressLevel] = useState(35);             // backend updates this
   const [trialCount, setTrialCount] = useState(1);
-  const [totalTrials] = useState(20);
-  const [accuracy, setAccuracy] = useState(85);
+  const totalTrials = 20;
+
+  const [accuracy, setAccuracy] = useState(85);                   // can update with real data
   const [reactionTime, setReactionTime] = useState(450);
+
   const [feedback, setFeedback] = useState<"correct" | "incorrect" | null>(null);
 
-  const handleResponse = useCallback((isMatch: boolean) => {
-    // Simulate feedback
-    const correct = Math.random() > 0.3;
-    setFeedback(correct ? "correct" : "incorrect");
-    
-    setTimeout(() => {
-      setFeedback(null);
-      // Generate next stimulus
-      setCurrentLetter(letters[Math.floor(Math.random() * letters.length)]);
-      setTrialCount(prev => {
-        if (prev >= totalTrials) {
-          navigate("/participant/stroop");
-          return prev;
-        }
-        return prev + 1;
-      });
-      
-      // Simulate changing metrics
-      setStressLevel(prev => Math.min(100, Math.max(0, prev + (Math.random() - 0.5) * 10)));
-      setReactionTime(Math.floor(300 + Math.random() * 400));
-    }, 800);
-  }, [navigate, totalTrials]);
+  // N-back trail history
+  const [stimHistory, setStimHistory] = useState<string[]>([]);
 
+  // -----------------------------
+  // SOCKET LISTENERS (difficulty + stress)
+  // -----------------------------
   useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft" || e.key === "a") {
-        handleResponse(true);
-      } else if (e.key === "ArrowRight" || e.key === "d") {
-        handleResponse(false);
-      }
+    if (!socket) return;
+
+    socket.on(`difficulty_update_${participantId}`, (msg) => {
+      setDifficultyLevel(msg.difficulty);
+    });
+
+    socket.on(`stress_update_${participantId}`, (msg) => {
+      const scaled = Math.floor(msg.ema_high * 100);
+      setStressLevel(scaled);
+    });
+
+    return () => {
+      socket?.off(`difficulty_update_${participantId}`);
+      socket?.off(`stress_update_${participantId}`);
+    };
+  }, [socket, participantId]);
+
+
+  // -----------------------------
+  // START TASK SESSION (Phase 3)
+  // -----------------------------
+  useEffect(() => {
+    async function init() {
+      await start("nback", { block: 1 });
+    }
+    init();
+  }, []);
+
+
+  // -----------------------------
+  // CHECK MATCH USING REAL N-BACK RULE
+  // -----------------------------
+  function isMatch(letter: string): boolean {
+    const n = difficultyLevel;
+    if (stimHistory.length < n) return false;
+    return letter === stimHistory[stimHistory.length - n];
+  }
+
+
+  // -----------------------------
+  // RESPONSE HANDLER
+  // -----------------------------
+  const handleResponse = useCallback(
+    async (userSaysMatch: boolean) => {
+      const match = isMatch(currentLetter);
+      const correct = userSaysMatch === match;
+
+      // show UI feedback
+      setFeedback(correct ? "correct" : "incorrect");
+
+      // send event to backend
+      await sendTrial({
+        task: "nback",
+        stimulus: currentLetter,
+        response: userSaysMatch ? "match" : "no_match",
+        correct,
+        reaction_time_ms: reactionTime
+      });
+
+      // small delay for UX
+      setTimeout(() => {
+        setFeedback(null);
+
+        // generate next letter
+        const next = letters[Math.floor(Math.random() * letters.length)];
+        setCurrentLetter(next);
+        setStimHistory((prev) => [...prev, next]);
+
+        // update trial count
+        setTrialCount((prev) => {
+          if (prev >= totalTrials) {
+            finish();
+            navigate("/participant/stroop", {
+              state: { token, participantId }
+            });
+            return prev;
+          }
+          return prev + 1;
+        });
+
+        // random fluctuation (temporary)
+        setReactionTime(Math.floor(300 + Math.random() * 300));
+        setAccuracy((acc) => acc + (correct ? 1 : -1));
+      }, 700);
+    },
+    [currentLetter, difficultyLevel, reactionTime, navigate, token, participantId]
+  );
+
+
+  // -----------------------------
+  // KEYBOARD INPUT (A / D)
+  // -----------------------------
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "a" || e.key === "ArrowLeft") handleResponse(true);
+      if (e.key === "d" || e.key === "ArrowRight") handleResponse(false);
     };
 
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
   }, [handleResponse]);
 
+
+  // -----------------------------
+  // RENDER UI (unchanged)
+  // -----------------------------
   return (
     <div className="min-h-screen flex flex-col p-6">
       {/* Header */}
@@ -65,11 +157,12 @@ export default function NBackTask() {
             {difficultyLevel}-back
           </span>
         </div>
+
         <div className="flex items-center gap-4">
           <span className="text-sm text-muted-foreground">
             Trial {trialCount} / {totalTrials}
           </span>
-          <Link to="/participant/break">
+          <Link to="/participant/break" state={{ token, participantId }}>
             <Button variant="ghost" size="sm" className="gap-2">
               <Pause className="w-4 h-4" />
               Pause
@@ -81,23 +174,25 @@ export default function NBackTask() {
       {/* Main Task Area */}
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center gap-16">
-          {/* Left Panel - Stress Gauge */}
+
+          {/* Stress Panel */}
           <div className="flex flex-col items-center gap-4">
             <StressGauge level={stressLevel} size="md" />
           </div>
 
-          {/* Center - Stimulus */}
+          {/* Stimulus & Feedback */}
           <div className="flex flex-col items-center gap-8">
             <div className="relative">
               <TaskStimulusCard content={currentLetter} size="xl" />
-              
-              {/* Feedback overlay */}
+
               {feedback && (
-                <div className={`absolute inset-0 flex items-center justify-center rounded-3xl ${
-                  feedback === "correct" 
-                    ? "bg-stress-low/20 border-2 border-stress-low" 
-                    : "bg-stress-high/20 border-2 border-stress-high"
-                }`}>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center rounded-3xl ${
+                    feedback === "correct"
+                      ? "bg-stress-low/20 border-2 border-stress-low"
+                      : "bg-stress-high/20 border-2 border-stress-high"
+                  }`}
+                >
                   {feedback === "correct" ? (
                     <Check className="w-16 h-16 text-stress-low" />
                   ) : (
@@ -107,20 +202,21 @@ export default function NBackTask() {
               )}
             </div>
 
-            {/* Response Buttons */}
+            {/* Buttons */}
             <div className="flex items-center gap-6">
-              <Button 
-                variant="success" 
-                size="lg" 
+              <Button
+                variant="success"
+                size="lg"
                 className="gap-2 min-w-[140px]"
                 onClick={() => handleResponse(true)}
               >
                 <Check className="w-5 h-5" />
                 Match (A)
               </Button>
-              <Button 
-                variant="danger" 
-                size="lg" 
+
+              <Button
+                variant="danger"
+                size="lg"
                 className="gap-2 min-w-[140px]"
                 onClick={() => handleResponse(false)}
               >
@@ -129,7 +225,7 @@ export default function NBackTask() {
               </Button>
             </div>
 
-            {/* Quick Stats */}
+            {/* Stats */}
             <div className="flex items-center gap-8 text-sm">
               <div className="text-center">
                 <p className="text-muted-foreground">Accuracy</p>
@@ -143,17 +239,19 @@ export default function NBackTask() {
             </div>
           </div>
 
-          {/* Right Panel - Difficulty */}
+          {/* Difficulty Panel */}
           <div className="flex flex-col items-center gap-4">
             <DifficultyMeter level={difficultyLevel} size="lg" />
           </div>
         </div>
       </div>
 
-      {/* Footer Instructions */}
+      {/* Footer */}
       <div className="text-center text-sm text-muted-foreground py-4">
-        Press <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">A</kbd> or <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">←</kbd> for Match · 
-        Press <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">D</kbd> or <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">→</kbd> for No Match
+        Press <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">A</kbd> / 
+        <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">←</kbd> for Match · 
+        Press <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">D</kbd> / 
+        <kbd className="px-2 py-0.5 rounded bg-muted font-mono text-xs">→</kbd> for No Match
       </div>
     </div>
   );
