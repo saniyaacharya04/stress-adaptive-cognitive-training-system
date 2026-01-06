@@ -50,3 +50,4 @@ app.db
 
 # Editor backups
 *.save
+backend/app.db
