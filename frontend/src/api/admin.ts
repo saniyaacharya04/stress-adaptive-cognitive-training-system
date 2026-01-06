@@ -1,6 +1,6 @@
-// frontend/src/api/admin.ts
-
 import { http } from "@/api/http";
+
+/* -------------------- TYPES -------------------- */
 
 export interface ApiResponse<T> {
   ok: boolean;
@@ -8,120 +8,74 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
-export interface LoginResponse {
-  token: string;
-  role: string;
-}
-
 export interface Participant {
   participant_id: string;
-  created_at: string;
-  assignment_group: string;
+  created_at?: string;
+  assignment_group?: string;
 }
 
 export interface LogRow {
-  id: number;
-  participant_id: string;
-  timestamp: string;
-  task: string | null;
-  trial: number | null;
-  event: string | null;
-  smoothed_high: number | null;
-  rmssd: number | null;
-  mean_hr: number | null;
-  accuracy: number | null;
-  payload: any;
+  id?: number;
+  participant_id?: string;
+  timestamp?: string;
+  task?: string | null;
+  trial?: number | null;
+  event?: string | null;
+  payload?: any;
 }
 
-/* ---------------------------------------------------------
-   ADMIN LOGIN
---------------------------------------------------------- */
+/* -------------------- AUTH -------------------- */
+
 export async function adminLogin(
   username: string,
   password: string
-): Promise<ApiResponse<LoginResponse>> {
+): Promise<ApiResponse<{ token: string }>> {
   const res = await http.post("/api/admin/login", { username, password });
-
-  const payload = res.data as {
-    ok: boolean;
-    token?: string;
-    error?: string;
-  };
-
-  if (payload.ok && payload.token) {
-    return {
-      ok: true,
-      data: {
-        token: payload.token,
-        role: "admin",
-      },
-    };
-  }
-
-  return {
-    ok: false,
-    data: null as any,
-    error: payload.error || "Login failed",
-  };
+  return res.data;
 }
 
-/* ---------------------------------------------------------
-   GET PARTICIPANTS
---------------------------------------------------------- */
+/* -------------------- PARTICIPANTS -------------------- */
+
 export async function getParticipants(): Promise<ApiResponse<Participant[]>> {
   const res = await http.get("/api/admin/participants");
-  return res.data as ApiResponse<Participant[]>;
+  return res.data;
 }
 
-/* ---------------------------------------------------------
-   LOG QUERY
---------------------------------------------------------- */
-export async function queryLogs(body: {
-  participant_id?: string;
-  task?: string;
-  limit?: number;
-  from_ts?: string;
-  to_ts?: string;
-}): Promise<ApiResponse<LogRow[]>> {
-  const res = await http.post("/api/admin/logs/query", body);
-  return res.data as ApiResponse<LogRow[]>;
+/* -------------------- LOG QUERY (STUB) -------------------- */
+
+export async function queryLogs(_: any): Promise<ApiResponse<LogRow[]>> {
+  return { ok: true, data: [] };
 }
 
-/* ---------- EXPORT CSV (STRONG TYPING + ERROR HANDLING) ---------- */
+/* -------------------- EXPORTS -------------------- */
+
 export async function exportParticipantCSV(
   participant_id: string
-): Promise<{ ok: boolean; blob?: Blob; error?: string }> {
-  try {
-    const response = await http.get<Blob>(
-      `/api/admin/export?participant_id=${encodeURIComponent(participant_id)}`,
-      { responseType: "blob" }
-    );
-
-    // Detect backend error returned as JSON instead of CSV
-    if (response.headers["content-type"]?.includes("application/json")) {
-      const text = await response.data.text();
-      const json = JSON.parse(text);
-      return { ok: false, error: json.error || "Export failed" };
-    }
-
-    return { ok: true, blob: response.data };
-  } catch (err: any) {
-    return { ok: false, error: err.message || "Network error" };
-  }
+): Promise<Blob> {
+  const res = await http.get(
+    `/api/admin/export?participant_id=${encodeURIComponent(participant_id)}`,
+    { responseType: "blob" }
+  );
+  return res.data;
 }
 
-
-/* ---------------------------------------------------------
-   CHANGE ADMIN PASSWORD
---------------------------------------------------------- */
-export async function changeAdminPassword(
-  old_pw: string,
-  new_pw: string
-) {
-  const res = await http.post("/admin/change-password", {
-    old_password: old_pw,
-    new_password: new_pw,
+export async function exportAllParticipantsZip(): Promise<Blob> {
+  const res = await http.get("/api/admin/export_all", {
+    responseType: "blob",
   });
-
   return res.data;
+}
+
+/* -------------------- LEGACY UI SUPPORT -------------------- */
+
+export function exportJSON(_: string) {
+  alert("JSON export not enabled in minimal build.");
+}
+
+export function exportExcel(_: string) {
+  alert("Excel export not enabled in minimal build.");
+}
+
+export async function changeAdminPassword(_: string, __: string) {
+  return { ok: false, error: "Not implemented in minimal build" };
 }
