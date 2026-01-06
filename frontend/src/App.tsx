@@ -23,7 +23,6 @@ import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import ParticipantsList from "./pages/admin/ParticipantsList";
 import ParticipantDetail from "./pages/admin/ParticipantDetail";
-import MonitoringRoom from "./pages/admin/MonitoringRoom";
 import LogBrowser from "./pages/admin/LogBrowser";
 import AdminSettings from "./pages/admin/AdminSettings";
 
@@ -62,7 +61,6 @@ export default function App() {
               <Route index element={<AdminDashboard />} />
               <Route path="participants" element={<ParticipantsList />} />
               <Route path="participants/:id" element={<ParticipantDetail />} />
-              <Route path="monitoring" element={<MonitoringRoom />} />
               <Route path="logs" element={<LogBrowser />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>
