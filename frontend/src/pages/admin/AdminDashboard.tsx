@@ -81,7 +81,7 @@ export default function AdminDashboard() {
         handleApplyFilter();
       }
     });
-    return (<>) => {
+    return () => {
     <button onClick={logout}>Logout</button>
       socket.off("admin_update");
     };
