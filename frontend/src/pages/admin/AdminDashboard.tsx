@@ -1,4 +1,5 @@
 // frontend/src/pages/admin/AdminDashboard.tsx
+import { logout } from "../../utils/auth";
 import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,7 +81,8 @@ export default function AdminDashboard() {
         handleApplyFilter();
       }
     });
-    return () => {
+    return (<>) => {
+    <button onClick={logout}>Logout</button>
       socket.off("admin_update");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -165,7 +167,8 @@ export default function AdminDashboard() {
     }
   };
 
-  return (
+  return (<>
+    <button onClick={logout}>Logout</button>
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Admin Dashboard</h1>
@@ -306,5 +309,6 @@ export default function AdminDashboard() {
         </div>
       </div>
     </div>
+</>
   );
 }
