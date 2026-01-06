@@ -133,3 +133,6 @@ class TaskTrial(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("TaskSession", backref="trials")
+
+# --- Phase 1: Users ---
+from backend.database.user import User
